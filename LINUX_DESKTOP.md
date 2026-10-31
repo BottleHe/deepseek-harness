@@ -53,6 +53,17 @@ pnpm run package:desktop:linux:x64:unsigned:dir
 - 首次启动会打开欢迎窗口并写入 `~/.dsh`（桌面 profile）。
 - Office 转 PDF 使用 `libreoffice-kit-wasm` 引擎（上游未发布 Linux 原生引擎），已通过打包冒烟验证。
 
+## 一键安装与升级（本机）
+
+安装到 `~/Application/deepseek-harness`，结构为 `versions/<版本>-<时间戳>/` + `current` 原子软链；重复运行即完成升级，保留最近 3 个版本可回滚，用户数据（`~/.dsh`）不受影响。同时写入应用菜单入口（`~/.local/share/applications/deepseek-harness.desktop`）并创建 `~/.local/bin/dsh` CLI 软链：
+
+```sh
+apps/desktop/scripts/install-linux-desktop.sh               # 安装/升级现有构建产物
+apps/desktop/scripts/install-linux-desktop.sh --rebuild     # 先重新打包再安装（上游同步后常用）
+```
+
+应用运行中脚本会拒绝安装并提示退出。回滚：`ln -sfn versions/<旧版本目录> ~/Application/deepseek-harness/current`。
+
 ## 与上游同步
 
 上游原始仓库为 `source` remote（deepseek-ai/deepseek-harness），个人 fork 为 `origin`：
