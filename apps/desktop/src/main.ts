@@ -35,6 +35,7 @@ import { DESKTOP_IPC, SCHEME, assertDesktopSender, type DesktopUpdateState } fro
 import { readDeviceInfo } from './device-info.ts'
 import { desktopUpdateReadyConfirmation, formatDesktopMessage, resolveDesktopLocale, resolveDesktopStartupLocale } from './locale.ts'
 import { claimDesktopSingleInstance } from './single-instance.ts'
+import { linuxWindowIconPath } from './window-icon.ts'
 import { desktopUpdateChannel } from './update-channel.ts'
 import { DesktopUpdateCoordinator } from './update-coordinator.ts'
 import { prepareDesktopUpdateWindow } from './update-window.ts'
@@ -263,6 +264,9 @@ function createWindow(preload: string, show = false, primary = false): BrowserWi
     minWidth: 520,
     minHeight: 600,
     show,
+    // Linux derives the window icon from these options; the other platforms take
+    // it from the executable and the application bundle.
+    ...(process.platform === 'linux' ? { icon: linuxWindowIconPath() } : {}),
     ...(process.platform === 'win32' && primary ? {
       titleBarStyle: 'hidden' as const,
       titleBarOverlay: { height: WINDOWS_TITLEBAR_HEIGHT, color: chromeFallbackFill(),
@@ -1089,15 +1093,20 @@ async function main(): Promise<void> {
     tray?.relabel()
   }
   refreshApplicationMenu()
-  const trayIconPath = development ? join(app.getAppPath(), 'resources', 'tray-windows.ico') : join(process.resourcesPath, 'tray.ico')
-  if (process.platform === 'win32') {
-    // The tray is the way back to a hidden window; without it, relaunching the application still focuses it.
+  // The tray is the way back to a hidden window: Windows reads the multi-size ICO by display
+  // scale, Linux tray hosts (AppIndicator) draw the application icon pixmap directly. macOS
+  // keeps the Dock and ships no menu bar icon.
+  const winTrayIconPath = development ? join(app.getAppPath(), 'resources', 'tray-windows.ico') : join(process.resourcesPath, 'tray.ico')
+  const trayImage = process.platform === 'win32' ? nativeImage.createFromPath(winTrayIconPath)
+    : process.platform === 'linux' ? nativeImage.createFromPath(linuxWindowIconPath()).resize({ width: 32, height: 32 })
+      : undefined
+  if (trayImage !== undefined) {
     try {
-      tray = new DesktopTray({ iconPath: trayIconPath, locale: currentDesktopLocale,
+      tray = new DesktopTray({ image: trayImage, locale: currentDesktopLocale,
         open: () => { focusPrimaryWindow() }, quit: () => { app.quit() } })
     } catch (error) { console.warn('desktop tray: unavailable', error) }
   }
-  const backgroundNotice = process.platform === 'win32'
+  const backgroundNotice = process.platform === 'win32' || process.platform === 'linux'
     ? new DesktopBackgroundNotice({ markerPath: join(app.getPath('userData'), 'background-close-confirmed'),
       locale: () => locale, show: ordinaryMessageBox, focus: () => { updateDialog.focus() } })
     : undefined
@@ -1111,7 +1120,7 @@ async function main(): Promise<void> {
     focus: () => { if (process.platform === 'darwin') app.focus({ steal: true }) },
     // The task dialog draws its main icon at the system icon size; the multi-size ICO yields that
     // size directly, where the 1024 px PNG would be scaled down by GDI.
-    ...(process.platform === 'win32' ? { icon: nativeImage.createFromPath(trayIconPath) } : {}),
+    ...(process.platform === 'win32' ? { icon: nativeImage.createFromPath(winTrayIconPath) } : {}),
   })
 
   if (process.platform === 'win32') {
@@ -1174,11 +1183,15 @@ async function main(): Promise<void> {
     browserGuests.bind(window, (guest, name) => shortcuts.attachGuest(window, guest, name))
     shortcuts.attach(window)
     window.on('focus', automaticCheck)
-    // Closing hides: the page and the Host keep running, and the next show resumes the same document.
+    // Windows and macOS hide on close: the page and the Host keep running, and the tray or the
+    // Dock brings the window back. Linux hides to its tray too, but when no tray host is
+    // available a hidden window would be unreachable, so the close quits through the standard
+    // confirmation instead of leaving the app running with no way back to its window.
     window.on('close', (event) => {
       if (quitting || shellInstallerOwnsQuit || sessionEnding) return
-      event.preventDefault()
       if (updateDialog.isOpen) { updateDialog.focus(); return }
+      if (process.platform === 'linux' && tray === undefined) { event.preventDefault(); app.quit(); return }
+      event.preventDefault()
       const hide = (): void => {
         if (!quitting && !shellInstallerOwnsQuit && !sessionEnding && !window.isDestroyed()) hideMainWindow(window)
       }

@@ -9,7 +9,7 @@ const electron = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, value?: unknown, attributes?: unknown) => Promise<unknown>>(),
 }))
 vi.mock('electron', () => ({
-  app: { getAppPath: () => electron.root },
+  app: { getAppPath: () => electron.root, isPackaged: false },
   BrowserWindow: vi.fn(function (options: unknown) { return electron.create(options) }),
   ipcMain: {
     handle: (name: string, handler: (event: unknown, value?: unknown, attributes?: unknown) => Promise<unknown>) => {
@@ -65,13 +65,16 @@ describe('desktop welcome window', () => {
       expect(options.vibrancy).toBe('menu')
       expect(options.visualEffectState).toBe('active')
       expect(options.trafficLightPosition).toEqual({ x: 21, y: 21 })
+      expect(options.icon).toBeUndefined()
     } else if (platform === 'win32') {
       expect(options.backgroundMaterial).toBe('acrylic')
       expect(options.titleBarOverlay).toMatchObject({ height: 42 })
+      expect(options.icon).toBeUndefined()
     } else {
       expect(options.backgroundColor).toBe('#FFFFFF')
       expect(options.vibrancy).toBeUndefined()
       expect(options.backgroundMaterial).toBeUndefined()
+      expect(options.icon).toBe(join(electron.root, 'resources', 'icon.png'))
     }
   })
 

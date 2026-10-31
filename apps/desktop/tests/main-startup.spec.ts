@@ -21,6 +21,8 @@ type InvokeHandler = (event: InvokeEvent, ...args: unknown[]) => unknown
 
 const fileDrag = vi.hoisted(() => ({ dispose: vi.fn<() => Promise<void>>(), install: vi.fn() }))
 vi.mock('../src/file-drag.ts', () => ({ installDesktopFileDrag: () => { fileDrag.install(); return fileDrag.dispose } }))
+const windowIcon = vi.hoisted(() => ({ path: 'desktop-test-icon.png' }))
+vi.mock('../src/window-icon.ts', () => ({ linuxWindowIconPath: () => windowIcon.path }))
 
 vi.mock('../src/web-document.ts', () => ({ authenticateWebHost: async () => 'test-cookie', serveWebDocument: vi.fn(), forwardWebRequest: vi.fn() }))
 vi.mock('../src/operation-report-job.ts', () => ({ runOperationReportJob: vi.fn(async () => ({ appended: false, timedOut: false, cancelled: false })) }))
@@ -203,16 +205,24 @@ const harness = await vi.hoisted(async () => {
   const analytics = vi.fn(async (_event: unknown) => {})
   const nativeTheme = { themeSource: 'system', shouldUseDarkColors: false }
   const trays: FakeTray[] = []
+  let failTray = false
   class FakeTray extends EventEmitter {
     readonly setToolTip = vi.fn()
     readonly setContextMenu = vi.fn()
     readonly destroy = vi.fn()
-    constructor(readonly image: unknown) { super(); trays.push(this) }
+    // A throwing constructor stands in for a host without a working tray (no AppIndicator library).
+    constructor(readonly image: unknown) {
+      super()
+      if (failTray) throw new Error('desktop tray: no StatusNotifier host')
+      trays.push(this)
+    }
   }
   const backgroundNotice = { close: vi.fn((hide: () => void) => { hide() }), dispose: vi.fn(), markerPath: undefined as string | undefined }
   const shellDialog = { isOpen: false, focus: vi.fn() }
   return {
     failWindow(error: Error) { windowFailure = error },
+    get failTray() { return failTray },
+    set failTray(value: boolean) { failTray = value },
     windows, views, hosts, handlers, app, FakeWindow, FakeView, FakeHost, powerMonitor, nativeTheme, analytics,
     trays, FakeTray, backgroundNotice, shellDialog,
     menu, popup, socketHeaders: vi.fn(), loginShell, readLoginShell, updateCheck, updateDownload, updateInstall,
@@ -268,6 +278,7 @@ const harness = await vi.hoisted(async () => {
       powerMonitor.removeAllListeners()
       app.isPackaged = true
       windowFailure = undefined
+      failTray = false
       pluginsEnabled = false
       closeWindowsOnQuit = false
       prepareUpdate = undefined
@@ -323,7 +334,12 @@ vi.mock('electron', () => ({
   protocol: { registerSchemesAsPrivileged: vi.fn(), handle: harness.protocolHandle },
   powerMonitor: harness.powerMonitor,
   Tray: harness.FakeTray,
-  nativeImage: { createFromPath: (path: string) => ({ path }) },
+  nativeImage: {
+    createFromPath: (path: string) => ({
+      path,
+      resize: (options: { width: number; height: number }) => ({ path, ...options }),
+    }),
+  },
 }))
 vi.mock('../src/background-notice.ts', () => ({ DesktopBackgroundNotice: class {
   constructor(options: { markerPath: string }) { harness.backgroundNotice.markerPath = options.markerPath }
@@ -589,8 +605,11 @@ describe('desktop main startup', () => {
     harness.ipcOn.mock.calls.find(([channel]) => channel === DESKTOP_IPC.localeChanged)![1](
       { sender, senderFrame: sender.mainFrame }, nextLocale,
     )
+    // The latest application-menu template: the Linux tray relabels after each refresh, and its
+    // buildFromTemplate call never carries a submenu.
     const refreshed = platform === 'win32' ? applicationMenuItems()
-      : harness.menu.mock.lastCall![0][0]!.submenu as MenuItemConstructorOptions[]
+      : harness.menu.mock.calls.map(call => call[0]).reverse()
+        .find(template => 'submenu' in template[0]!)![0]!.submenu as MenuItemConstructorOptions[]
     expect(refreshed.filter(item => item.role === 'toggleDevTools' && item.visible !== false)).toEqual([
       { role: 'toggleDevTools', label: nextLocale === 'en' ? en.toggleDevToolsMenu : zh.toggleDevToolsMenu },
     ])
@@ -898,14 +917,17 @@ describe('desktop main startup', () => {
     expect(window.urls).toEqual(['dsh-app://app/'])
     if (platform === 'darwin') {
       expect(window.options).toMatchObject({ titleBarStyle: 'hiddenInset', vibrancy: 'sidebar', backgroundColor: '#00000000' })
+      expect(window.options).not.toHaveProperty('icon')
     } else if (platform === 'win32') {
       expect(window.options).toMatchObject({ titleBarStyle: 'hidden', titleBarOverlay: { height: WINDOWS_TITLEBAR_HEIGHT } })
+      expect(window.options).not.toHaveProperty('icon')
       expect(window.options).not.toHaveProperty('vibrancy')
       expect(harness.menu.mock.calls[0]![0]).toEqual([
         { role: 'toggleDevTools', visible: false },
         { role: 'toggleDevTools', visible: false, accelerator: 'F12' },
       ])
     } else {
+      expect(window.options).toMatchObject({ icon: windowIcon.path })
       expect(window.options).not.toHaveProperty('titleBarStyle')
       expect(window.options).not.toHaveProperty('vibrancy')
     }
@@ -1352,7 +1374,7 @@ describe('desktop main startup', () => {
     const host = await readyWorkspace()
     const window = harness.windows[0]!
     expect(harness.trays).toHaveLength(1)
-    expect(harness.trays[0]!.image).toEqual({ path: join('desktop-test-resources', 'tray.ico') })
+    expect(harness.trays[0]!.image).toMatchObject({ path: join('desktop-test-resources', 'tray.ico') })
     expect(harness.backgroundNotice.markerPath).toBe(join(harness.app.getPath('userData'), 'background-close-confirmed'))
     window.show.mockClear()
     window.close()
@@ -1370,6 +1392,50 @@ describe('desktop main startup', () => {
     const relabels = harness.trays[0]!.setContextMenu.mock.calls.length
     harness.ipcOn.mock.calls.find(call => call[0] === DESKTOP_IPC.localeChanged)![1]({ sender: window.webContents, senderFrame: window.webContents.mainFrame }, 'zh')
     expect(harness.trays[0]!.setContextMenu.mock.calls.length).toBe(relabels + 1)
+  })
+
+  it('quits through the standard confirmation when closing on Linux without a tray host', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'linux', arch: 'x64', resourcesPath: 'desktop-test-resources' })
+    harness.failTray = true
+    const host = await readyWorkspace()
+    const window = harness.windows[0]!
+    expect(harness.trays).toHaveLength(0)
+    host.inspectQuit.mockResolvedValue({ activeTasks: true, scheduledTasks: false })
+    const hides = window.hide.mock.calls.length
+    // The close asks through the quit confirmation; a cancellation keeps the window and the Host.
+    harness.dialog.showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false })
+    window.close()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(harness.dialog.showMessageBox).toHaveBeenCalledOnce()
+    expect(window.isDestroyed()).toBe(false)
+    expect(window.hide).toHaveBeenCalledTimes(hides)
+    expect(host.stop).not.toHaveBeenCalled()
+    // Approving the confirmation tears the Host down instead of hiding the window.
+    harness.dialog.showMessageBox.mockResolvedValue({ response: 0, checkboxChecked: false })
+    window.close()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(host.stop).toHaveBeenCalledOnce()
+    await host.stopping.promise
+    host.exited.resolve()
+    await harness.quitCompleted.promise
+  })
+
+  it('hides into the Linux tray on close and reopens the window from it', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'linux', arch: 'x64', resourcesPath: 'desktop-test-resources' })
+    const host = await readyWorkspace()
+    const window = harness.windows[0]!
+    expect(harness.trays).toHaveLength(1)
+    // The Linux tray draws the application icon pixmap itself; the shell scales the 32 px source.
+    expect(harness.trays[0]!.image).toEqual({ path: windowIcon.path, width: 32, height: 32 })
+    window.show.mockClear()
+    window.close()
+    expect(window.isDestroyed()).toBe(false)
+    expect(window.hide).toHaveBeenCalledOnce()
+    expect(host.stop).not.toHaveBeenCalled()
+    expect(harness.app.quit).not.toHaveBeenCalled()
+    expect(harness.backgroundNotice.close).toHaveBeenCalledOnce()
+    harness.trays[0]!.emit('click')
+    expect(window.show).toHaveBeenCalledOnce()
   })
 
   it('hides a macOS owner with a mandatory view without quitting or stopping the Host', async () => {

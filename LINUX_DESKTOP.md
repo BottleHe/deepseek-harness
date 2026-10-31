@@ -52,6 +52,8 @@ pnpm run package:desktop:linux:x64:unsigned:dir
 - 本机（Ubuntu, kernel 6.8, X11）上 Electron 原生沙箱直接可用，无需 `--no-sandbox`。若你的发行版限制了非特权 user namespace 且启动报 sandbox 错误：`sudo chown root:root chrome-sandbox && sudo chmod 4755 chrome-sandbox`，或临时用 `--no-sandbox` 启动。
 - 首次启动会打开欢迎窗口并写入 `~/.dsh`（桌面 profile）。
 - Office 转 PDF 使用 `libreoffice-kit-wasm` 引擎（上游未发布 Linux 原生引擎），已通过打包冒烟验证。
+- 应用图标：安装脚本写入的启动器条目指向 `resources/icon.png`；窗口标题栏/任务栏/Alt-Tab 图标由 `BrowserWindow({ icon })` 提供同一资源；打包清单的 `desktopName` 与条目名、`StartupWMClass` 三者一致（均为 `deepseek-harness`），运行中的窗口才会和启动器条目关联并显示产品图标，而不是默认的 Electron 图标。
+- 系统托盘与关闭行为：Linux 与 Windows 一致，关闭主窗口隐藏到托盘（首次关闭有一次提示），托盘提供「打开 / 退出」入口，托盘图标即应用图标（32 px）。Ubuntu 桌面默认带 AppIndicator 支持，直接可用；vanilla GNOME 需先启用 AppIndicator 扩展。托盘宿主不可用时（如缺少 libayatana-appindicator），关闭窗口改为走标准退出确认直接退出，避免留下无法找回的后台进程；任何时候重新运行可执行文件都会聚焦已有实例（单实例锁）。Windows 隐藏到托盘、macOS 隐藏到 Dock 的行为不变。
 
 ## 一键安装与升级（本机）
 
@@ -81,7 +83,7 @@ pnpm exec vitest run apps/desktop/tests/desktop-build-paths.spec.ts apps/desktop
 - `apps/desktop/scripts/package-target.ts` 的 `TARGETS` 注册表与宿主机校验
 - `apps/desktop/scripts/desktop-build-paths.mjs` / `.d.mts` 的 `SUPPORTED_TARGETS` 与平台映射
 - `apps/desktop/scripts/prepare-runtime.ts`、`prepare-dsh.ts` 的 Electron 可执行文件三段路径
-- `apps/desktop/scripts/electron-builder-config.mjs` 的 `linux` 段（icon / executableName）
+- `apps/desktop/scripts/electron-builder-config.mjs` 的 `linux` 段（icon / executableName / syncDesktopName）与 `extraMetadata.desktopName`
 - `apps/desktop/patches/libreoffice-kit@0.1.5.patch`：若上游升级 `@deepseek-ai/libreoffice-kit` 版本，需同步 `runtime-patch-policy.ts` 中的 spec 并按新版本内容重新生成补丁（修的是 asar 环境下 `lstatSync(…, { throwIfNoEntry: false })` 返回 `null` 导致 Linux WASM 引擎回退失效的问题；上游修复该问题后可直接删除补丁）
 
 ## 本分支改动清单
@@ -95,12 +97,14 @@ pnpm exec vitest run apps/desktop/tests/desktop-build-paths.spec.ts apps/desktop
 | `apps/desktop/scripts/prepare-runtime.ts` / `prepare-dsh.ts` | Electron 可执行文件路径三段化（win32/darwin/linux） |
 | `apps/desktop/scripts/prepare-cli.ts` + `apps/desktop/cli/dsh-linux` | Linux `dsh` 启动器（按 `resources/` 相对路径解析可执行文件） |
 | `apps/desktop/scripts/smoke-packaged-runtime.ts` | `linux-unpacked` 布局与 `deepseek-harness` 可执行文件路径 |
-| `apps/desktop/scripts/electron-builder-config.mjs` | unsigned 非 Windows 跳过策略；linux 段补 icon / executableName |
+| `apps/desktop/scripts/electron-builder-config.mjs` | unsigned 非 Windows 跳过策略；linux 段补 icon / executableName / syncDesktopName，extraMetadata 补 `desktopName`（Linux app_id / WM_CLASS 与启动器条目一致） |
+| `apps/desktop/src/window-icon.ts`、`src/main.ts`、`src/welcome-window.ts` | Linux 窗口图标：主窗口与欢迎窗口通过 `BrowserWindow({ icon })` 使用 `resources/icon.png`（标题栏/任务栏/Alt-Tab 不再显示默认 Electron 图标）；Linux 启用系统托盘（应用图标 32 px，首次关闭提示一次），有托盘时关闭即隐藏、无托盘宿主时关闭走标准退出确认，win/mac 行为不变 |
+| `apps/desktop/scripts/install-linux-desktop.sh` | 启动器条目补 `StartupWMClass=deepseek-harness`，运行中的窗口与条目正确关联 |
 | `apps/desktop/scripts/runtime-patch-policy.ts` + `apps/desktop/patches/libreoffice-kit@0.1.5.patch` | 运行时专用补丁：修复 asar 下 LibreOfficeKit Linux WASM 引擎回退 |
 | `apps/desktop/scripts/desktop-upload-plan.ts`、`upload-target.ts`、`desktop-edgeone.ts`、`retain-desktop-ci.ts`、`development-project.ts` | 上传/公证/CI 保留流程保持 mac/win-only（类型收窄为 `DesktopAutoUpdateTarget`）；dev 启动放宽为 `DesktopBuildTarget` |
 | `apps/desktop/scripts/seed-runtime-download-cache.py` | 镜像预填充下载缓存辅助脚本 |
 | `apps/desktop/package.json`、`package.json` | `package:linux:x64:unsigned[:dir]` 脚本 |
-| 相关 spec | `desktop-build-paths` / `package-target` / `prepare-runtime-patches` 断言随行为更新 |
+| 相关 spec | `desktop-build-paths` / `package-target` / `prepare-runtime-patches` 断言随行为更新；`linux-desktop` / `window-icon` 覆盖图标关联，`welcome-window` / `main-startup` 断言窗口 icon |
 
 ## 已知限制
 

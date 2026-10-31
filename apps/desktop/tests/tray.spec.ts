@@ -15,13 +15,11 @@ const native = await vi.hoisted(async () => {
   const menus: MenuItemConstructorOptions[][] = []
   return {
     trays, FakeTray, menus,
-    createFromPath: vi.fn((path: string) => ({ path })),
     buildFromTemplate: vi.fn((template: MenuItemConstructorOptions[]) => { menus.push(template); return { template } }),
   }
 })
 vi.mock('electron', () => ({
   Tray: native.FakeTray,
-  nativeImage: { createFromPath: native.createFromPath },
   Menu: { buildFromTemplate: native.buildFromTemplate },
 }))
 
@@ -31,7 +29,8 @@ function setup(locale = 'en') {
   let current = resolveDesktopLocale(locale)
   const open = vi.fn()
   const quit = vi.fn()
-  const tray = new DesktopTray({ iconPath: 'C:/app/resources/tray.ico', locale: () => current, open, quit })
+  const tray = new DesktopTray({ image: { path: 'C:/app/resources/tray.ico' } as never,
+    locale: () => current, open, quit })
   return { tray, open, quit, native: native.trays[0]!, setLocale: (next: string) => { current = resolveDesktopLocale(next) } }
 }
 
@@ -41,7 +40,6 @@ function labels(menu: MenuItemConstructorOptions[]): (string | undefined)[] {
 
 it('shows the application icon with its name as the tooltip and an Open / Quit menu', () => {
   const f = setup()
-  expect(native.createFromPath).toHaveBeenCalledWith('C:/app/resources/tray.ico')
   expect(f.native.image).toEqual({ path: 'C:/app/resources/tray.ico' })
   expect(f.native.setToolTip).toHaveBeenCalledWith('DeepSeek Harness')
   expect(labels(native.menus[0]!)).toEqual(['Open DeepSeek Harness', 'separator', 'Quit DeepSeek Harness'])

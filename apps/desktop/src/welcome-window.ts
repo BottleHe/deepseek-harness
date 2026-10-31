@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, ipcMain, type BrowserWindowConstructorOptions, type IpcMainInvokeEvent } from 'electron'
 import type { DesktopLocale } from './locale.ts'
+import { linuxWindowIconPath } from './window-icon.ts'
 import { WELCOME_IPC, type WelcomeOperations } from './welcome-api.ts'
 
 /**
@@ -25,6 +26,7 @@ export function welcomeWindowOptions(platform: NodeJS.Platform, locale: DesktopL
     show: false,
     title: locale.messages.welcomeTitle,
     backgroundColor: platform === 'darwin' || platform === 'win32' ? '#00000000' : '#FFFFFF',
+    ...(platform === 'linux' ? { icon: linuxWindowIconPath() } : {}),
     ...(platform === 'darwin' ? {
       titleBarStyle: 'hidden',
       trafficLightPosition: { x: 21, y: 21 },

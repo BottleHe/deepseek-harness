@@ -110,6 +110,9 @@ export function createElectronBuilderConfig(
     protocols: [{ name: 'DeepSeek Harness', schemes: ['dsh'] }],
     extraMetadata: {
       dshDesktopAppId: appId,
+      // Electron derives the Linux app_id / WM_CLASS from this manifest field; keep it equal to the
+      // launcher entry basename (syncDesktopName below) so running windows associate with the product icon.
+      desktopName: 'deepseek-harness.desktop',
       dshDesktopUpdateChannel: update?.channel ?? 'nightly',
       ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),
       ...buildVersion === productVersion ? {} : { version: buildVersion },
@@ -258,6 +261,9 @@ export function createElectronBuilderConfig(
       target: ['AppImage'],
       // Fixed executable name keeps launcher and smoke paths stable; the default derives it from productName.
       executableName: 'deepseek-harness',
+      // Name the generated .desktop entry after desktopName so its StartupWMClass matches the running
+      // windows and desktop environments link them to this entry instead of a generic icon.
+      syncDesktopName: true,
       icon: fileURLToPath(new URL('../resources/icon.png', import.meta.url)),
     },
     nsis: {

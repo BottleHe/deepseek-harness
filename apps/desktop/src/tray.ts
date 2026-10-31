@@ -1,12 +1,13 @@
-/** Windows system tray: the always-present way back to a hidden window and the explicit quit entry. */
+/** Windows and Linux system tray: the always-present way back to a hidden window and the explicit quit entry. */
 
-import { Menu, nativeImage, Tray } from 'electron'
+import { Menu, Tray } from 'electron'
+import type { NativeImage } from 'electron'
 import type { DesktopLocale } from './locale.ts'
 
 /** Main-process actions the tray triggers; both run the same paths as the window and application menu. */
 export interface DesktopTrayOptions {
-  /** Multi-size ICO rendered by `scripts/render-tray-icon.ts`; Windows picks the bitmap for the display scale. */
-  readonly iconPath: string
+  /** Ready-made tray image: the multi-size Windows ICO picked by display scale, or the Linux app icon pixmap. */
+  readonly image: NativeImage
   readonly locale: () => DesktopLocale
   /** Show and focus the primary window. */
   readonly open: () => void
@@ -18,9 +19,9 @@ export interface DesktopTrayOptions {
 export class DesktopTray {
   private tray: Tray | undefined
 
-  /** @param options - Icon path, locale reader, and the open and quit actions. */
+  /** @param options - Tray image, locale reader, and the open and quit actions. */
   constructor(private readonly options: DesktopTrayOptions) {
-    const tray = new Tray(nativeImage.createFromPath(options.iconPath))
+    const tray = new Tray(options.image)
     this.tray = tray
     tray.on('click', () => { options.open() })
     this.relabel()

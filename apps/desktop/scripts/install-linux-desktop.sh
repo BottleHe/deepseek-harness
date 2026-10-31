@@ -89,7 +89,8 @@ for directory in "${OLD[@]}"; do
   rm -rf "${directory%/}"
 done
 
-# 桌面菜单入口。
+# 桌面菜单入口。StartupWMClass 与 Electron 的 desktopName（app_id / WM_CLASS）一致，
+# 运行中的窗口才能和本条目关联并显示产品图标。
 mkdir -p "$HOME/.local/share/applications"
 cat > "$HOME/.local/share/applications/deepseek-harness.desktop" <<EOF
 [Desktop Entry]
@@ -100,6 +101,7 @@ Exec=$ROOT/current/deepseek-harness
 Icon=$ROOT/current/resources/icon.png
 Terminal=false
 Categories=Development;Utility;
+StartupWMClass=deepseek-harness
 EOF
 update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 
