@@ -2445,8 +2445,7 @@ describe('desktop main startup', () => {
     expect((harness.dialog.showMessageBox.mock.calls[0]![0] as MessageBoxOptions).detail).toContain('profile has no cordis.yml')
   })
 
-  it('attaches the primary window\'s error-level console output to a running-phase Host crash report', async () => {
-    harness.dialog.showMessageBox.mockResolvedValue({ response: 0, checkboxChecked: false })
+  it('attaches the primary window\'s error-level console output to a running-phase Host crash report and restarts the Host', async () => {
     await import('../src/main.ts')
     await harness.preparing.promise
     harness.prepared.resolve()
@@ -2472,8 +2471,14 @@ describe('desktop main startup', () => {
     expect(report.rendererConsole).toEqual(['dsh-app://app/assets/entry.js:12 client-modules: bundle script plugins/??a/client.js&rev=1 failed to load'])
     expect(report.app).toMatchObject({ name: 'Desktop test', version: '1.0.0', platform: process.platform, locale: 'en' })
     expect(report.time).toBeInstanceOf(Date)
+    expect(harness.dialog.showMessageBox).not.toHaveBeenCalled()
+    // The unexpected exit restarts the Host and reloads the shell document instead of quitting.
     host.exited.resolve()
-    await harness.quitCompleted.promise
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(harness.hosts).toHaveLength(2)
+    harness.hosts[1]!.ready.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(window.urls).toEqual(['dsh-app://app/', 'dsh-app://app/'])
   })
 
   it.each([{ rejectCleanup: false, stuck: false }, { rejectCleanup: true, stuck: false },
@@ -2551,14 +2556,24 @@ describe('desktop main startup', () => {
     await harness.preparing.promise
     harness.prepared.resolve()
     await harness.hostStarted.promise
-    const host = harness.hosts[0]!
-    host.ready.resolve()
+    harness.hosts[0]!.ready.resolve()
     await Promise.resolve(invoke(DESKTOP_IPC.boot))
-    host.onFailure!(new Error('backend exited'))
-    await host.stopping.promise
+    // The first unexpected exits recover by restarting the Host; the exhausted budget leaves this one fatal.
+    let crashing = harness.hosts.at(-1)!
+    for (let restart = 0; restart < 3; restart += 1) {
+      crashing.onFailure!(new Error('backend exited'))
+      await crashing.stopping.promise
+      crashing.exited.resolve()
+      await vi.advanceTimersByTimeAsync(1_000)
+      crashing = harness.hosts.at(-1)!
+      crashing.ready.resolve()
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    crashing.onFailure!(new Error('backend exited'))
+    await crashing.stopping.promise
     expect(harness.app.relaunch).not.toHaveBeenCalled()
     expect(harness.disableAllPlugins).not.toHaveBeenCalled()
-    host.exited.resolve()
+    crashing.exited.resolve()
     await vi.advanceTimersByTimeAsync(0)
     expect(reportSignal?.aborted).toBe(true)
     expect(harness.app.quit).not.toHaveBeenCalled()
@@ -2579,7 +2594,40 @@ describe('desktop main startup', () => {
       expect(console.info).not.toHaveBeenCalled()
     }
     expect(harness.dialog.showMessageBox).toHaveBeenCalledOnce()
-    expect(harness.windows[0]!.urls).toEqual(['dsh-app://app/'])
+    // The three pre-budget restarts each reloaded the shell document before the fatal crash.
+    expect(harness.windows[0]!.urls).toEqual(['dsh-app://app/', 'dsh-app://app/', 'dsh-app://app/', 'dsh-app://app/'])
+  })
+
+  it('restarts the workspace Host after an unexpected exit and reaches fatal recovery only after the budget', async () => {
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    harness.prepared.resolve()
+    await harness.hostStarted.promise
+    harness.hosts[0]!.ready.resolve()
+    await Promise.resolve(invoke(DESKTOP_IPC.boot))
+    for (let restart = 0; restart < 3; restart += 1) {
+      const dying = harness.hosts.at(-1)!
+      dying.onFailure!(new Error(`backend exited ${String(restart)}`))
+      await dying.stopping.promise
+      dying.exited.resolve()
+      await vi.advanceTimersByTimeAsync(1_000)
+      harness.hosts.at(-1)!.ready.resolve()
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(harness.hosts).toHaveLength(4)
+    expect(harness.dialog.showMessageBox).not.toHaveBeenCalled()
+    expect(writeCrashReport).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(writeCrashReport).mock.calls.every(([, report]) => report.source === 'host' && report.phase === 'running')).toBe(true)
+    harness.dialog.showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false })
+    const dying = harness.hosts.at(-1)!
+    dying.onFailure!(new Error('backend exited again'))
+    await dying.stopping.promise
+    dying.exited.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(harness.hosts).toHaveLength(4)
+    expect(writeCrashReport).toHaveBeenCalledTimes(4)
+    expect(harness.dialog.showMessageBox).toHaveBeenCalledOnce()
+    await harness.quitCompleted.promise
   })
 
   it('creates the Host only after the login-shell read and ends the read on quit', async () => {

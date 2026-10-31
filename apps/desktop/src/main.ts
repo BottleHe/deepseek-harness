@@ -594,9 +594,54 @@ async function main(): Promise<void> {
       resolveDragResource: (address: string, signal?: AbortSignal) => host.resolveDragResource(address, signal),
     }
   }, (state) => {
-    if (state.phase === 'error') reportFatal(state.failure, 'host')
+    if (state.phase === 'error') recoverHost(state.failure)
     else if (!shuttingDown) backendReady = state.phase === 'ready'
   })
+
+  // An unexpected Host exit (for example an internal Electron CHECK under heavy subprocess load)
+  // recovers by starting a replacement Host and reloading the shell document, the same way an
+  // update installation restores the workspace. Restarts are budgeted so a Host that keeps dying
+  // still reaches the fatal recovery instead of crash-looping the application; startup failures
+  // never reached a workspace and stay on the fatal path.
+  const HOST_RESTART_BUDGET = 3
+  const HOST_RESTART_WINDOW_MS = 10 * 60_000
+  const HOST_RESTART_DELAY_MS = 1_000
+  const hostRestarts: number[] = []
+  const recoverHost = (failure: unknown): void => {
+    if (!backendReady || quitting || shuttingDown || !enteredWorkspace
+      || mainWindow === undefined || mainWindow.isDestroyed()) {
+      reportFatal(failure, 'host')
+      return
+    }
+    const now = Date.now()
+    while (hostRestarts.length > 0) {
+      const oldest = hostRestarts[0]
+      if (oldest === undefined || now - oldest <= HOST_RESTART_WINDOW_MS) break
+      hostRestarts.shift()
+    }
+    if (hostRestarts.length >= HOST_RESTART_BUDGET) {
+      reportFatal(failure, 'host')
+      return
+    }
+    hostRestarts.push(now)
+    void persistCrashReport(failure, 'host').catch((error: unknown) => { console.error(error) })
+    updateJournal?.action('host-restarted')
+    const hostReady = new Promise<void>((resolve) => { setTimeout(resolve, HOST_RESTART_DELAY_MS) })
+      .then(() => backend.start(prepareHostEnvironment))
+    startup = hostReady
+    const recovery = hostReady.then(async () => {
+      if (quitting) return
+      // A replacement Host can have a new port, cookie, or boot injections even at the same URL.
+      navigation = undefined
+      await navigateMain(applicationUrl)
+      if (backend.host !== undefined) updateJournal?.action('workspace-ready')
+    })
+    workspaceRecovery = recovery
+    void recovery.catch((error: unknown) => { reportFatal(error, 'main') }).finally(() => {
+      if (startup === hostReady) startup = undefined
+      if (workspaceRecovery === recovery) workspaceRecovery = undefined
+    })
+  }
 
   const updateErrors = new WeakMap<DesktopUpdateState, Promise<void>>()
   const showUpdateFailure = (state: DesktopUpdateState): Promise<void> => {
