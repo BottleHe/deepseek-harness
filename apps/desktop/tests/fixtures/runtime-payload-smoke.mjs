@@ -109,6 +109,18 @@ function checkKoffi() {
 /** Encode and decode a pixel through the packaged libvips binary. */
 async function checkSharp() {
   const sharp = requireRuntime('sharp')
+  // Native sharp's bundled GLib collides with the system GLib linked into Electron's Linux
+  // executable, so Linux packages ship only the WebAssembly backend and must not resolve the
+  // native one; other platforms ship only their native backend.
+  const expectsWasm = process.platform === 'linux'
+  const nativePackage = `@img/sharp-${process.platform}-${process.arch}`
+  let nativeResolved = true
+  try {
+    requireRuntime.resolve(nativePackage)
+  } catch {
+    nativeResolved = false
+  }
+  assert.equal(nativeResolved, !expectsWasm, `sharp must resolve the ${expectsWasm ? 'WebAssembly' : 'native'} backend`)
   const pixel = Buffer.from([17, 103, 231])
   const png = await sharp(pixel, { raw: { width: 1, height: 1, channels: 3 } }).png().toBuffer()
   const decoded = await sharp(png).raw().toBuffer({ resolveWithObject: true })

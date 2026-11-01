@@ -27,6 +27,14 @@ export function desktopRuntimeFileExclusion(
   if (name.startsWith('@deepseek-ai/libreoffice-kit-')) {
     if (name !== `@deepseek-ai/libreoffice-kit-${officeEngine}`) return 'LibreOffice other platform'
   }
+  // Native sharp bundles its own GLib, which collides with the system GLib linked into
+  // Electron's Linux executable: concurrent image work raises endless g_object_ref assertion
+  // failures and ends in an internal CHECK crash (sharp#4522). Linux targets ship only sharp's
+  // WebAssembly backend, which sharp's loader falls back to when the native package is absent;
+  // other targets keep their native backend and drop the unused WebAssembly package.
+  if (name.startsWith('@img/sharp-')) {
+    if ((target.platform === 'linux') !== (name === '@img/sharp-wasm32')) return 'sharp other backend'
+  }
   if (name === 'fs-ext' && /^build\/(?:Release|Debug)\/(?:obj(?:\/|$)|fs_ext\.(?:exp|lib|pdb|iobj|ipdb)$)/u.test(entry)) {
     return 'fs-ext compiler output'
   }

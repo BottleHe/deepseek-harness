@@ -91,6 +91,20 @@ it('retains native prebuilds for the selected macOS architecture', () => {
   expect(desktopRuntimeFileExclusion('node-pty/prebuilds/win32-x64/conpty.node', mac, 'darwin-arm64')).toBeDefined()
 })
 
+it('ships only the WebAssembly sharp backend for Linux targets and the native one elsewhere', () => {
+  const linux = { platform: 'linux' as const, arch: 'x64' }
+  expect(desktopRuntimeFileExclusion('@img/sharp-linux-x64/lib/sharp-linux-x64-0.35.5.node', linux, 'wasm')).toBe('sharp other backend')
+  expect(desktopRuntimeFileExclusion('@img/sharp-libvips-linux-x64/lib/libvips-cpp.so.8.18.7', linux, 'wasm')).toBe('sharp other backend')
+  expect(desktopRuntimeFileExclusion('@img/sharp-wasm32/lib/sharp-wasm32.node', linux, 'wasm')).toBeUndefined()
+  expect(desktopRuntimeFileExclusion('@img/sharp-wasm32/package.json', linux, 'wasm')).toBeUndefined()
+  const win32 = { platform: 'win32' as const, arch: 'x64' }
+  expect(desktopRuntimeFileExclusion('@img/sharp-win32-x64/lib/libvips-42.dll', win32, 'wasm')).toBeUndefined()
+  expect(desktopRuntimeFileExclusion('@img/sharp-wasm32/lib/sharp-wasm32.node', win32, 'wasm')).toBe('sharp other backend')
+  const mac = { platform: 'darwin' as const, arch: 'arm64' }
+  expect(desktopRuntimeFileExclusion('@img/sharp-darwin-arm64/lib/sharp-darwin-arm64.node', mac, 'darwin-arm64')).toBeUndefined()
+  expect(desktopRuntimeFileExclusion('@img/sharp-wasm32/lib/sharp-wasm32.node', mac, 'darwin-arm64')).toBe('sharp other backend')
+})
+
 it.each([
   ['darwin', 'arm64'], ['darwin', 'x64'],
   ['linux', 'arm64'], ['linux', 'x64'],
